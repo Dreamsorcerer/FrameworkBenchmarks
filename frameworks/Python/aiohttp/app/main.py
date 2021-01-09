@@ -3,12 +3,11 @@ import multiprocessing
 from pathlib import Path
 
 import aiohttp_jinja2
+import aiopg.sa
 import asyncpg
 import jinja2
 from aiohttp import web
 from sqlalchemy.engine.url import URL
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
 
 from .views import (
     json,
@@ -33,13 +32,13 @@ def pg_dsn() -> str:
     """
     :return: DSN url suitable for sqlalchemy and aiopg.
     """
-    return str(URL.create(
+    return str(URL(
         database='hello_world',
         password=os.getenv('PGPASS', 'benchmarkdbpass'),
         host='tfb-database',
         port='5432',
         username=os.getenv('PGUSER', 'benchmarkdbuser'),
-        drivername='postgresql',
+        drivername='postgres',
     ))
 
 
@@ -53,14 +52,16 @@ async def db_ctx(app: web.Application):
     min_size = max(int(max_size / 2), 1)
     print(f'connection pool: min size: {min_size}, max size: {max_size}, orm: {CONNECTION_ORM}')
     if CONNECTION_ORM:
-        engine = create_async_engine(dsn, future=True)
-        app['db_session'] = sessionmaker(engine, class_=AsyncSession)
+        app['pg'] = await aiopg.sa.create_engine(dsn=dsn, minsize=min_size, maxsize=max_size, loop=app.loop)
     else:
         app['pg'] = await asyncpg.create_pool(dsn=dsn, min_size=min_size, max_size=max_size, loop=app.loop)
 
     yield
 
-    if not CONNECTION_ORM:
+    if CONNECTION_ORM:
+        app['pg'].close()
+        await app['pg'].wait_closed()
+    else:
         await app['pg'].close()
 
 
